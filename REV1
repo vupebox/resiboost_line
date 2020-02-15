@@ -1,0 +1,219 @@
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+
+
+int I01 = I0_1;//I0_1; //Siwtch to be in analog //A0
+int p_Guarda = I0_2;//I0_2; //Siwtch to be in digital 2 
+int p_Start = I0_6;//I0_3; //Siwtch to be in digital 3
+int p_Stop = I0_4;//I0_4; //Siwtch to be in digital 4
+int p_Restart = I0_5; //I0_5; //Siwtch to be in digital 5
+int p_Motor = Q0_3;//Q0_6; //Siwtch should be in digital 6
+int p_Red = Q0_5; //Q0_5;
+int p_Green = Q0_4; //Q0_4;
+
+float upperPSI = 165.0;//165.0;  //limite Superior 
+float floorPSI = 89.0;//160.0;  //limite Inferior
+
+
+unsigned long refreshLCD = 1000;
+
+
+////////////////////////////////////////////////////////// NO MODIFICAR /////////////////////////////////////////////////////////////////////////////////
+//PSI
+int analog_value;
+long value;
+float voltage;
+float psi = 0;
+int psiINT = 0;
+int psiDECIMAL = 0;
+
+//ERROR DETECTOR
+bool error = false;
+bool overPSI = false;
+bool underPSI = false;
+//pin Status
+bool Motor = false;
+bool Guarda = false;
+bool Start = false;
+bool Stop = false;
+bool Restart = false;
+bool Freeze = false;
+
+LiquidCrystal_I2C lcd(0x27,16,2);
+
+unsigned long time1;
+unsigned long time2;
+
+
+
+void setup() {
+  // put your setup code here, to run once:
+  pinMode(I01,INPUT);
+  pinMode(p_Guarda,INPUT);
+  pinMode(p_Start,INPUT);
+  pinMode(p_Stop,INPUT);
+  pinMode(p_Restart,INPUT);
+
+  pinMode(p_Motor,OUTPUT);
+  pinMode(p_Red,OUTPUT);
+  pinMode(p_Green,OUTPUT);
+
+  digitalWrite(p_Motor,LOW);
+  digitalWrite(p_Red,LOW);
+  digitalWrite(p_Green,LOW);
+  
+  Serial.begin(9600);
+
+  setupLCD();
+
+
+}
+
+void setupLCD(){
+    //Inicializar el LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  delay(200);
+  lcd.clear();
+  delay(200);
+  time1 = millis();
+  //lcd.print("Hola Mundo");
+}
+
+void loop() {
+  if(!Freeze && !overPSI){ //Verifica que no ha superado el limite de presión o estado de detener, si la supera deja de medir.
+    readVoltage();
+    voltage2psi();
+
+    if(psi < floorPSI){ //Verifica los limites de presión
+      error = true;
+      underPSI = true;
+      overPSI = false;
+    }else if(psi > upperPSI){
+      error = true;
+      underPSI = false;
+      overPSI = true;
+    }else{
+      error = false;
+      underPSI = false;
+      overPSI = false;
+    }
+  }
+
+  
+  //Check Condition for motor status
+  readButtoms();
+  if(Motor && Guarda)
+    Stop = true;
+    
+  if(Start && !Guarda) //!Guarda , puerta cerrada
+    Motor = true;
+
+  if(Stop || Restart || overPSI)
+    Motor = false;
+
+  if(Stop){
+    Freeze = true;
+  }
+
+  if(Restart)
+    restart();
+
+  if(Motor){
+    digitalWrite(p_Motor,HIGH);
+  }else{
+    digitalWrite(p_Motor,LOW);
+  }
+
+  if(error){
+    digitalWrite(p_Red,HIGH);
+    digitalWrite(p_Green,LOW);
+  }else{
+    digitalWrite(p_Red,LOW);
+    digitalWrite(p_Green,HIGH);
+  }
+
+  time2 = millis() - time1;
+  if(time2 >= refreshLCD){
+    updateLCD();
+    time1 = millis();
+  }
+  delay(5);
+  /*Serial.print("Error: ");
+  Serial.print(error);
+  Serial.print("   Medición: ");
+  Serial.println(psi);
+  delay(100);*/
+}
+
+void readButtoms(){
+  Guarda = digitalRead(p_Guarda);
+  Start = digitalRead(p_Start);
+  Stop = !digitalRead(p_Stop);
+  Restart = digitalRead(p_Restart);
+
+}
+
+
+void restart(){
+  error = false;
+  underPSI = false;
+  overPSI = false;
+  Freeze = false;
+  Motor = false;
+}
+
+void readVoltage(){
+  analog_value = analogRead(I01);
+  value = (long)analog_value * 10;
+  voltage = (float)value / float(1023);
+}
+
+void voltage2psi(){
+  psi = mapF(voltage,0.5,4.5,0.0,174.045);
+  psiINT = (int) psi;
+  psiDECIMAL = (int) ((psi - (float)psiINT)*100.0);
+}
+
+void updateLCD(){
+  char line1[16];
+  char line2[16];
+
+  char MotorStr = 'M';
+  if(!Motor)
+    MotorStr = ' ';
+
+  char GuardaStr = 'G';
+  if(!Guarda)
+    GuardaStr = ' ';
+
+  char StatusStr[6] = "NORMAL";
+  if(error)
+    strcpy(StatusStr, " ERROR");
+
+  char ErrorTypeStr = ' ';
+  if(overPSI)
+    ErrorTypeStr = '+';
+
+  if(underPSI)
+    ErrorTypeStr = '-';
+  
+  lcd.setCursor(0,0);
+  sprintf_P(line1, (PGM_P)F("%1c %1c     %1c %6s"), MotorStr, GuardaStr, ErrorTypeStr, StatusStr);
+  lcd.print(line1);
+  /*Serial.print("linea1: ");
+  Serial.println(line1);*/
+
+  lcd.setCursor(0,1);
+  sprintf_P(line2, (PGM_P)F("%9d.%02d PSI"), psiINT, psiDECIMAL);
+  lcd.print(line2);
+  /*Serial.print("linea2: ");
+  Serial.println(line2);*/
+  
+  
+}
+
+float mapF(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
